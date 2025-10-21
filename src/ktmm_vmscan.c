@@ -59,6 +59,9 @@ wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 
 
 /************** MISC HOOKED FUNCTION PROTOTYPES *****************************/
+
+static bool (*pt_folio_test_clear_referenced)(struct folio *folio);
+
 static struct mem_cgroup *(*pt_mem_cgroup_iter)(struct mem_cgroup *root,
 				struct mem_cgroup *prev,
 				struct mem_cgroup_reclaim_cookie *reclaim);
@@ -111,6 +114,13 @@ static struct page *(*pt_alloc_pages)(gfp_t gfp_mask, unsigned int order, int pr
 
 
 /**************** KTMM IMPLEMENTATION OF HOOKED FUNCTION **********************/
+
+static bool ktmm_folio_test_clear_referenced(struct folio *folio)
+{
+	printk(KERN_INFO "sudarshan: entered %s\n", __func__);
+	return pt_folio_test_clear_referenced(folio);
+}
+
 static struct mem_cgroup *ktmm_mem_cgroup_iter(struct mem_cgroup *root,
 				struct mem_cgroup *prev,
 				struct mem_cgroup_reclaim_cookie *reclaim)
@@ -398,70 +408,85 @@ static inline bool ktmm_folio_needs_release(struct folio *folio)
  * pmem node.
  */
 static void scan_promote_list(unsigned long nr_to_scan,
-				struct lruvec *lruvec,
-				struct scan_control *sc,
-				enum lru_list lru,
-				struct pglist_data *pgdat)
+  struct lruvec *lruvec,
+  struct scan_control *sc,
+  enum lru_list lru,
+  struct pglist_data *pgdat)
 {
-  printk(KERN_INFO "sudarshan: entered %s\n", __func__);
+printk(KERN_INFO "sudarshan: entered %s\n", __func__);
 
-	unsigned long nr_taken;
-	unsigned long nr_scanned;
-	unsigned long nr_migrated = 0;
-	isolate_mode_t isolate_mode = 0;
-	LIST_HEAD(l_hold);
-	int file = is_file_lru(lru);
-	int nid = pgdat->node_id;
+unsigned long nr_taken;
+unsigned long nr_scanned;
+unsigned long nr_migrated = 0;
+isolate_mode_t isolate_mode = 0;
+LIST_HEAD(l_hold);
+int file = is_file_lru(lru);
+int nid = pgdat->node_id;
 
-	struct list_head *src = &lruvec->lists[lru];
+struct list_head *src = &lruvec->lists[lru];
 
-	if (list_empty(src))
-		pr_debug("promote list empty");
+if (list_empty(src))
+pr_debug("promote list empty");
 
-	//pr_debug("scanning promote list");
+//pr_debug("scanning promote list");
 
-	if (!sc->may_unmap)
-		isolate_mode |= ISOLATE_UNMAPPED;
+if (!sc->may_unmap)
+isolate_mode |= ISOLATE_UNMAPPED;
 
-	ktmm_lru_add_drain();
+ktmm_lru_add_drain();
 
-	spin_lock_irq(&lruvec->lru_lock);
+spin_lock_irq(&lruvec->lru_lock);
 
-	nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &l_hold,
-					&nr_scanned, sc, lru);
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &l_hold,
+    &nr_scanned, sc, lru);
+__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
 
-	spin_unlock_irq(&lruvec->lru_lock);
+spin_unlock_irq(&lruvec->lru_lock);
 
-	pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
-	pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
+pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
+pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
 
-	// if (nr_taken) {
-	// 	unsigned int succeeded;
-	// 	int ret = migrate_pages(&l_hold, alloc_normal_page,
-	// 			NULL, 0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
-	// 	nr_migrated = (ret < 0 ? 0 : nr_taken - ret);
-	// 	__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
+// Check reference bit on each folio and print access status
+{
+struct folio *folio;
+struct list_head *pos;
+int was_accessed;
 
-	// 	pr_debug("pgdat %d migrated %lu folios from promote list", nid, nr_migrated);
-	// }
-  
+list_for_each(pos, &l_hold) {
+folio = lru_to_folio(pos);
 
-  //dummy code
-  if (nr_taken) {
-    nr_migrated = 0;  // No migration actually happens
-    pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from promote list", nid, nr_taken);
-  }
+// Check if page was accessed: returns 1 if accessed, 0 if not
+was_accessed = ktmm_folio_test_clear_referenced(folio) ? 1 : 0;
+printk(KERN_INFO "sudarshan: PROMOTE LIST - folio %px accessed=%d\n", folio, was_accessed);
+}
+}
 
-	spin_lock_irq(&lruvec->lru_lock);
+// if (nr_taken) {
+// 	unsigned int succeeded;
+// 	int ret = migrate_pages(&l_hold, alloc_normal_page,
+// 			NULL, 0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
+// 	nr_migrated = (ret < 0 ? 0 : nr_taken - ret);
+// 	__mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
 
-	ktmm_move_folios_to_lru(lruvec, &l_hold);
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
+// 	pr_debug("pgdat %d migrated %lu folios from promote list", nid, nr_migrated);
+// }
 
-	spin_unlock_irq(&lruvec->lru_lock);
 
-	ktmm_cgroup_uncharge_list(&l_hold);
-	ktmm_free_unref_page_list(&l_hold);
+//dummy code
+if (nr_taken) {
+nr_migrated = 0;  // No migration actually happens
+pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from promote list", nid, nr_taken);
+}
+
+spin_lock_irq(&lruvec->lru_lock);
+
+ktmm_move_folios_to_lru(lruvec, &l_hold);
+__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
+
+spin_unlock_irq(&lruvec->lru_lock);
+
+ktmm_cgroup_uncharge_list(&l_hold);
+ktmm_free_unref_page_list(&l_hold);
 }
 
 
@@ -480,125 +505,131 @@ static void scan_promote_list(unsigned long nr_to_scan,
  * scanning on the pmem node.
  */
 static void scan_active_list(unsigned long nr_to_scan,
-				struct lruvec *lruvec,
-				struct scan_control *sc,
-				enum lru_list lru,
-				struct pglist_data *pgdat)
+  struct lruvec *lruvec,
+  struct scan_control *sc,
+  enum lru_list lru,
+  struct pglist_data *pgdat)
 {
-  printk(KERN_INFO "sudarshan: entered %s\n", __func__);
+printk(KERN_INFO "sudarshan: entered %s\n", __func__);
 
-	unsigned long nr_taken;
-	unsigned long nr_scanned;
-	unsigned long vm_flags;
-	LIST_HEAD(l_hold);	// The folios which were snipped off
-	LIST_HEAD(l_active);
-	LIST_HEAD(l_inactive);
-	LIST_HEAD(l_promote);
-	unsigned nr_deactivate, nr_activate, nr_promote;
-	unsigned nr_rotated = 0;
-	int file = is_file_lru(lru);
-	int nid = pgdat->node_id;
-	
-	//pr_info("scanning active list");
+unsigned long nr_taken;
+unsigned long nr_scanned;
+unsigned long vm_flags;
+LIST_HEAD(l_hold);	// The folios which were snipped off
+LIST_HEAD(l_active);
+LIST_HEAD(l_inactive);
+LIST_HEAD(l_promote);
+unsigned nr_deactivate, nr_activate, nr_promote;
+unsigned nr_rotated = 0;
+int file = is_file_lru(lru);
+int nid = pgdat->node_id;
 
-	// make sure pages in per-cpu lru list are added
-	ktmm_lru_add_drain();
+//pr_info("scanning active list");
 
-	spin_lock_irq(&lruvec->lru_lock);
+// make sure pages in per-cpu lru list are added
+ktmm_lru_add_drain();
 
-	nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &l_hold,
-				     &nr_scanned, sc, lru);
+spin_lock_irq(&lruvec->lru_lock);
 
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &l_hold,
+       &nr_scanned, sc, lru);
 
-	spin_unlock_irq(&lruvec->lru_lock);
+__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
 
-	while (!list_empty(&l_hold)) {
-		struct folio *folio;
+spin_unlock_irq(&lruvec->lru_lock);
 
-		cond_resched();
-		folio = lru_to_folio(&l_hold);
-		list_del(&folio->lru);
+while (!list_empty(&l_hold)) {
+struct folio *folio;
+int was_accessed;  // Will be 1 or 0
 
-		if (unlikely(!ktmm_folio_evictable(folio))) {
-			ktmm_folio_putback_lru(folio);
-			continue;
-		}
+cond_resched();
+folio = lru_to_folio(&l_hold);
+list_del(&folio->lru);
 
-		if (unlikely(buffer_heads_over_limit)) {
-			if (ktmm_folio_needs_release(folio) &&
-			    folio_trylock(folio)) {
-				filemap_release_folio(folio, 0);
-				folio_unlock(folio);
-			}
-		}
-
-		// node migration
-		if (pgdat->pm_node != 0) {
-			//pr_debug("active pm_node");
-			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
-				pr_debug("set promote");
-				//SetPagePromote(page); NEEDS TO BE MODULE TRACKED
-				folio_set_promote(folio);
-				list_add(&folio->lru, &l_promote);
-				continue;
-			}
-		}
-
-		// might not need, we only care about promoting here in the
-		// module
-		/*
-		if (sc->only_promote) {
-			list_add(&folio->lru, &l_active);
-			continue;
-		}
-		*/
-
-		// Referenced or rmap lock contention: rotate
-		if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup,
-				     &vm_flags) != 0) {
-			/*
-			  Identify referenced, file-backed active folios and
-			  give them one more trip around the active list. So
-			  that executable code get better chances to stay in
-			  memory under moderate memory pressure.  Anon folios
-			  are not likely to be evicted by use-once streaming
-			  IO, plus JVM can create lots of anon VM_EXEC folios,
-			  so we ignore them here.
-			*/
-			if ((vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
-				nr_rotated += folio_nr_pages(folio);
-				list_add(&folio->lru, &l_active);
-				continue;
-			}
-		}
-
-		folio_clear_active(folio);	// we are de-activating
-		folio_set_workingset(folio);
-		list_add(&folio->lru, &l_inactive);
-	}
-
-	// Move folios back to the lru list.
-	spin_lock_irq(&lruvec->lru_lock);
-
-	nr_activate = ktmm_move_folios_to_lru(lruvec, &l_active);
-	nr_deactivate = ktmm_move_folios_to_lru(lruvec, &l_inactive);
-	nr_promote = ktmm_move_folios_to_lru(lruvec, &l_promote);
-
-	pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
-	pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
-	pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
-
-	// Keep all free folios in l_active list
-	list_splice(&l_inactive, &l_active);
-
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
-
-	spin_unlock_irq(&lruvec->lru_lock);
-
-	ktmm_cgroup_uncharge_list(&l_active);
-	ktmm_free_unref_page_list(&l_active);
+if (unlikely(!ktmm_folio_evictable(folio))) {
+ktmm_folio_putback_lru(folio);
+continue;
 }
+
+if (unlikely(buffer_heads_over_limit)) {
+if (ktmm_folio_needs_release(folio) &&
+    folio_trylock(folio)) {
+  filemap_release_folio(folio, 0);
+  folio_unlock(folio);
+}
+}
+
+// Check if page was accessed: returns 1 if accessed, 0 if not
+was_accessed = ktmm_folio_test_clear_referenced(folio) ? 1 : 0;
+printk(KERN_INFO "sudarshan: ACTIVE LIST - folio %px accessed=%d\n", folio, was_accessed);
+
+// node migration
+if (pgdat->pm_node != 0) {
+//pr_debug("active pm_node");
+if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+  pr_debug("set promote");
+  //SetPagePromote(page); NEEDS TO BE MODULE TRACKED
+  folio_set_promote(folio);
+  list_add(&folio->lru, &l_promote);
+  continue;
+}
+}
+
+// might not need, we only care about promoting here in the
+// module
+/*
+if (sc->only_promote) {
+list_add(&folio->lru, &l_active);
+continue;
+}
+*/
+
+// Referenced or rmap lock contention: rotate
+if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup,
+       &vm_flags) != 0) {
+/*
+  Identify referenced, file-backed active folios and
+  give them one more trip around the active list. So
+  that executable code get better chances to stay in
+  memory under moderate memory pressure.  Anon folios
+  are not likely to be evicted by use-once streaming
+  IO, plus JVM can create lots of anon VM_EXEC folios,
+  so we ignore them here.
+*/
+if ((vm_flags & VM_EXEC) && folio_is_file_lru(folio)) {
+  nr_rotated += folio_nr_pages(folio);
+  list_add(&folio->lru, &l_active);
+  continue;
+}
+}
+
+folio_clear_active(folio);	// we are de-activating
+folio_set_workingset(folio);
+list_add(&folio->lru, &l_inactive);
+}
+
+// Move folios back to the lru list.
+spin_lock_irq(&lruvec->lru_lock);
+
+nr_activate = ktmm_move_folios_to_lru(lruvec, &l_active);
+nr_deactivate = ktmm_move_folios_to_lru(lruvec, &l_inactive);
+nr_promote = ktmm_move_folios_to_lru(lruvec, &l_promote);
+
+pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
+pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
+pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
+
+// Keep all free folios in l_active list
+list_splice(&l_inactive, &l_active);
+
+__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
+
+spin_unlock_irq(&lruvec->lru_lock);
+
+ktmm_cgroup_uncharge_list(&l_active);
+ktmm_free_unref_page_list(&l_active);
+}
+
 
 
 /**
@@ -618,63 +649,78 @@ static void scan_active_list(unsigned long nr_to_scan,
  * folios when neccessary.
  */
 static unsigned long scan_inactive_list(unsigned long nr_to_scan,
-					struct lruvec *lruvec,
-					struct scan_control *sc,
-					enum lru_list lru,
-					struct pglist_data *pgdat)
+  struct lruvec *lruvec,
+  struct scan_control *sc,
+  enum lru_list lru,
+  struct pglist_data *pgdat)
 {
-  printk(KERN_INFO "sudarshan: entered %s\n", __func__);
+printk(KERN_INFO "sudarshan: entered %s\n", __func__);
 
-	LIST_HEAD(folio_list);
-	unsigned long nr_scanned;
-	unsigned long nr_taken = 0;
-	unsigned long nr_migrated = 0;
-	unsigned long nr_reclaimed = 0;
-	bool file = is_file_lru(lru);
-	int nid = pgdat->node_id;
-	//pr_info("scanning inactive list");
+LIST_HEAD(folio_list);
+unsigned long nr_scanned;
+unsigned long nr_taken = 0;
+unsigned long nr_migrated = 0;
+unsigned long nr_reclaimed = 0;
+bool file = is_file_lru(lru);
+int nid = pgdat->node_id;
+//pr_info("scanning inactive list");
 
-	// make sure pages in per-cpu lru list are added
-	ktmm_lru_add_drain();
+// make sure pages in per-cpu lru list are added
+ktmm_lru_add_drain();
 
-	// We want to isolate the pages we are going to scan.
-	spin_lock_irq(&lruvec->lru_lock);
+// We want to isolate the pages we are going to scan.
+spin_lock_irq(&lruvec->lru_lock);
 
-	nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &folio_list,
-				     &nr_scanned, sc, lru);
+nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &folio_list,
+     &nr_scanned, sc, lru);
 
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
 
-	spin_unlock_irq(&lruvec->lru_lock);
+spin_unlock_irq(&lruvec->lru_lock);
 
-	if (nr_taken == 0) return 0;
+if (nr_taken == 0) return 0;
 
-	//migrate pages down to the pmem node
-	// if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-	// 	unsigned int succeeded;
-	// 	int ret = migrate_pages(&folio_list, alloc_pmem_page, NULL, 
-	// 				0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
-	// 	nr_migrated = (ret >= 0 ? nr_taken - ret : 0);
-	// 	pr_debug("pgdat %d migrated %lu folios from inactive list", nid, nr_migrated);
-	// 	__mod_node_page_state(pgdat, NR_DEMOTED, nr_reclaimed);
-	// }
+// Check reference bit on each folio and print access status
+{
+struct folio *folio;
+struct list_head *pos;
+int was_accessed;
+
+list_for_each(pos, &folio_list) {
+folio = lru_to_folio(pos);
+
+// Check if page was accessed: returns 1 if accessed, 0 if not
+was_accessed = ktmm_folio_test_clear_referenced(folio) ? 1 : 0;
+printk(KERN_INFO "sudarshan: INACTIVE LIST - folio %px accessed=%d\n", folio, was_accessed);
+}
+}
+
+//migrate pages down to the pmem node
+// if (pgdat->pm_node == 0 && pmem_node_id != -1) {
+// 	unsigned int succeeded;
+// 	int ret = migrate_pages(&folio_list, alloc_pmem_page, NULL, 
+// 				0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
+// 	nr_migrated = (ret >= 0 ? nr_taken - ret : 0);
+// 	pr_debug("pgdat %d migrated %lu folios from inactive list", nid, nr_migrated);
+// 	__mod_node_page_state(pgdat, NR_DEMOTED, nr_reclaimed);
+// }
 //dummy code
-  if (pgdat->pm_node == 0 && pmem_node_id != -1) {
-    nr_migrated = 0;  // No migration actually happens
-    pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from inactive list", nid, nr_taken);
-  }
+if (pgdat->pm_node == 0 && pmem_node_id != -1) {
+nr_migrated = 0;  // No migration actually happens
+pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from inactive list", nid, nr_taken);
+}
 
-	spin_lock_irq(&lruvec->lru_lock);
+spin_lock_irq(&lruvec->lru_lock);
 
-	ktmm_move_folios_to_lru(lruvec, &folio_list);
-	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
+ktmm_move_folios_to_lru(lruvec, &folio_list);
+__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
 
-	spin_unlock_irq(&lruvec->lru_lock);
+spin_unlock_irq(&lruvec->lru_lock);
 
-	ktmm_cgroup_uncharge_list(&folio_list);
-	ktmm_free_unref_page_list(&folio_list);
+ktmm_cgroup_uncharge_list(&folio_list);
+ktmm_free_unref_page_list(&folio_list);
 
-	return nr_migrated;
+return nr_migrated;
 }
 
 
@@ -894,6 +940,7 @@ static struct ktmm_hook vmscan_hooks[] = {
 	HOOK("folio_putback_lru", ktmm_folio_putback_lru, &pt_folio_putback_lru),
 	HOOK("folio_referenced", ktmm_folio_referenced, &pt_folio_referenced),
 	HOOK("__alloc_pages", ktmm_alloc_pages, &pt_alloc_pages),
+	HOOK("folio_test_clear_referenced", ktmm_folio_test_clear_referenced, &pt_folio_test_clear_referenced),
 };
 
 
