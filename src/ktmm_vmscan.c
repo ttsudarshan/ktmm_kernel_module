@@ -233,26 +233,13 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
-    const char *node_type;
+    const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     
-    /* Determine node type for logging */
-    if (pgdat->pm_node == 0) {
-        node_type = "DRAM";
-    } else {
-        node_type = "PMEM";
-    }
+    /* JUST MONITOR - don't clear the flag */
+    was_accessed = folio_test_referenced(folio);
     
-    /* 
-     * folio_test_clear_referenced() atomically:
-     * - Returns 1 if page WAS referenced (accessed) since last check  
-     * - Returns 0 if page was NOT referenced since last check
-     * - Clears the referenced flag for next observation period
-     */
-    was_accessed = folio_test_clear_referenced(folio, 0, NULL, NULL) > 0;
-    
-    /* Log the access pattern and node type for debugging/monitoring */
-    printk(KERN_INFO "Page access tracking at %s: %d (folio=%p, node_type=%s, was_accessed=%d)\n", 
-             location, was_accessed, folio, node_type, was_accessed);
+    printk(KERN_INFO "Page access MONITOR at %s: was_accessed=%d (folio=%p, node=%s)\n", 
+             location, was_accessed, folio, node_type);
     
     return was_accessed;
 }
