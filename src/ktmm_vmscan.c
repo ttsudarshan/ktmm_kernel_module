@@ -248,7 +248,7 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
      * - Returns 0 if page was NOT referenced since last check
      * - Clears the referenced flag for next observation period
      */
-    was_accessed = folio_test_clear_referenced(folio);
+    was_accessed = folio_referenced(folio, 0, NULL, NULL) > 0;
     
     /* Log the access pattern and node type for debugging/monitoring */
     printk(KERN_INFO "Page access tracking at %s: %d (folio=%p, node_type=%s, was_accessed=%d)\n", 
