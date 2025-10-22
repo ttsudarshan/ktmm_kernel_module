@@ -218,51 +218,6 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
  *****************************************************************************/
 
 /**
- * access_folio_memory - actually access folio memory content
- * 
- * @folio: folio to access
- * 
- * This function actually reads from the folio memory to trigger
- * the hardware reference bit to be set and simulate real memory access.
- */
-static void access_folio_memory(struct folio *folio)
-{
-    void *addr;
-    volatile char *memory;
-    int i;
-    char buffer[64];
-    
-    /* Map the folio to access its memory */
-    addr = kmap_local_folio(folio, 0);
-    if (!addr) {
-        printk(KERN_INFO "Failed to map folio %p\n", folio);
-        return;
-    }
-    
-    memory = (volatile char *)addr;
-    
-    /* Actually read from the memory to trigger access and set reference bit */
-    /* Read multiple locations to ensure we touch different cache lines */
-    for (i = 0; i < folio_size(folio) && i < 4096; i += 64) {
-        buffer[i/64] = memory[i];  // Read access
-    }
-    
-    /* Also write to the memory to ensure dirty access */
-    for (i = 0; i < folio_size(folio) && i < 4096; i += 128) {
-        memory[i] = buffer[i/128];  // Write access
-    }
-    
-    /* Ensure the memory operations are not optimized out */
-    barrier();
-    
-    /* Unmap the folio */
-    kunmap_local(addr);
-    
-    printk(KERN_INFO "Accessed folio memory content: folio=%p, size=%lu\n", 
-           folio, folio_size(folio));
-}
-
-/**
  * track_folio_access - track if folio was previously accessed
  * 
  * @folio: folio to check
@@ -287,9 +242,6 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
         node_type = "PMEM";
     }
     
-    /* ACCESS THE FOLIO MEMORY CONTENT - This will set the reference bit */
-    access_folio_memory(folio);
-    
     /* 
      * folio_test_clear_referenced() atomically:
      * - Returns 1 if page WAS referenced (accessed) since last check  
@@ -297,7 +249,7 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
      * - Clears the referenced flag for next observation period
      */
     was_accessed = folio_test_clear_referenced(folio);
-
+    
     /* Log the access pattern and node type for debugging/monitoring */
     printk(KERN_INFO "Page access tracking at %s: %d (folio=%p, node_type=%s, was_accessed=%d)\n", 
              location, was_accessed, folio, node_type, was_accessed);
@@ -633,7 +585,7 @@ static void scan_active_list(unsigned long nr_to_scan,
 			//pr_debug("active pm_node");
 			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
 				pr_debug("set promote");
-				//SetPagePromote(page); NEEDS TO BE MODIFIED TRACKED
+				//SetPagePromote(page); NEEDS TO BE MODULE TRACKED
 				folio_set_promote(folio);
 				list_add(&folio->lru, &l_promote);
 				continue;
