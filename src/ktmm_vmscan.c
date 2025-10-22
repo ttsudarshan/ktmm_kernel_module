@@ -226,8 +226,9 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
  * 
  * Returns: 1 if page was previously accessed, 0 if first access
  * 
- * This function checks the referenced flag WITHOUT clearing it,
- * allowing other parts of the system to also detect the access.
+ * This function uses folio_test_clear_referenced() to atomically
+ * check and clear the referenced flag, tracking page access patterns
+ * without affecting core functionality.
  */
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
@@ -242,22 +243,16 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
     }
     
     /* 
-     * Use folio_referenced() for non-destructive checking:
-     * - Returns number of times page was referenced (>= 1 means accessed)
-     * - Does NOT clear the referenced flag
-     * - Allows other subsystems to also detect the access
+     * folio_test_clear_referenced() atomically:
+     * - Returns 1 if page WAS referenced (accessed) since last check  
+     * - Returns 0 if page was NOT referenced since last check
+     * - Clears the referenced flag for next observation period
      */
-    was_accessed = folio_referenced(folio, 0, NULL, NULL) > 0;
-    
-    /* 
-     * Alternative: Use folio_test_referenced() if you just want to check the flag
-     * without the rmap walking that folio_referenced() does
-     * was_accessed = folio_test_referenced(folio);
-     */
+    was_accessed = folio_test_clear_referenced(folio, 0, NULL, NULL) > 0;
     
     /* Log the access pattern and node type for debugging/monitoring */
-    printk(KERN_INFO "Page access tracking at %s: folio=%p, node_type=%s, was_accessed=%d\n", 
-             location, folio, node_type, was_accessed);
+    printk(KERN_INFO "Page access tracking at %s: %d (folio=%p, node_type=%s, was_accessed=%d)\n", 
+             location, was_accessed, folio, node_type, was_accessed);
     
     return was_accessed;
 }
