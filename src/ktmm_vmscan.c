@@ -226,22 +226,26 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
  * 
  * Returns: 1 if page was previously accessed, 0 if first access
  * 
- * This function uses folio_test_referenced() to check the referenced flag
- * WITHOUT clearing it, allowing multiple checks across different lists.
- * The bit should be cleared separately using folio_clear_referenced() 
- * at the end of the scan cycle.
+ * This function checks the referenced bit and if it's set (accessed),
+ * it prints the access information and immediately clears the bit.
+ * This way, if the same folio is checked again in the same scan cycle,
+ * it won't show as accessed again (avoiding duplicate logging).
  */
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
     const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     
-    /* Check the referenced flag WITHOUT clearing it */
+    /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
     
     if (was_accessed) {
+        /* Print the access information */
         printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
                  location, folio, node_type, jiffies);
+        
+        /* Immediately clear the bit after printing so we don't print it again in the same scan */
+        folio_clear_referenced(folio);
     } else {
         printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
                  location, folio, node_type, jiffies);
@@ -480,9 +484,6 @@ static void scan_promote_list(unsigned long nr_to_scan,
 		list_for_each_entry_safe(folio, next, &l_hold, lru) {
 			/* Track access pattern for debugging/monitoring */
 			track_folio_access(folio, pgdat, "PROMOTE_LIST");
-			
-			/* Clear the referenced bit after tracking for next scan cycle */
-			folio_clear_referenced(folio);
 		}
 	}
 
@@ -572,9 +573,6 @@ static void scan_active_list(unsigned long nr_to_scan,
 
 		/* ADDED: Track page access pattern during active list scanning */
 		track_folio_access(folio, pgdat, "ACTIVE_LIST");
-		
-		/* Clear the referenced bit after tracking for next scan cycle */
-		folio_clear_referenced(folio);
 
 		if (unlikely(!ktmm_folio_evictable(folio))) {
 			ktmm_folio_putback_lru(folio);
@@ -712,9 +710,6 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		list_for_each_entry_safe(folio, next, &folio_list, lru) {
 			/* Track access pattern for debugging/monitoring */
 			track_folio_access(folio, pgdat, "INACTIVE_LIST");
-			
-			/* Clear the referenced bit after tracking for next scan cycle */
-			folio_clear_referenced(folio);
 		}
 	}
 
