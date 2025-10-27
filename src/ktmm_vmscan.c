@@ -236,7 +236,7 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
     const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     
     /* JUST MONITOR - don't clear the flag */
-    was_accessed = folio_test_referenced(folio);
+    was_accessed = folio_test_clear_referenced(folio);
     
     printk(KERN_INFO "Page access MONITOR at %s: was_accessed=%d (folio=%p, node=%s)\n", 
              location, was_accessed, folio, node_type);
