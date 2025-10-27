@@ -242,7 +242,7 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
         printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
                  location, folio, node_type, jiffies);
     } else {
-        printk(KERN_DEBUG "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
+        printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
                  location, folio, node_type, jiffies);
     }
     
@@ -472,6 +472,16 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
 	pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
 
+	/* ADDED: Track access patterns for each folio in promote list */
+	if (!list_empty(&l_hold)) {
+		struct folio *folio, *next;
+		
+		list_for_each_entry_safe(folio, next, &l_hold, lru) {
+			/* Track access pattern for debugging/monitoring */
+			track_folio_access(folio, pgdat, "PROMOTE_LIST");
+		}
+	}
+
 	// if (nr_taken) {
 	// 	unsigned int succeeded;
 	// 	int ret = migrate_pages(&l_hold, alloc_normal_page,
@@ -557,7 +567,7 @@ static void scan_active_list(unsigned long nr_to_scan,
 		list_del(&folio->lru);
 
 		/* ADDED: Track page access pattern during active list scanning */
-		track_folio_access(folio, pgdat, "active_list_scan");
+		track_folio_access(folio, pgdat, "ACTIVE_LIST");
 
 		if (unlikely(!ktmm_folio_evictable(folio))) {
 			ktmm_folio_putback_lru(folio);
@@ -694,7 +704,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		
 		list_for_each_entry_safe(folio, next, &folio_list, lru) {
 			/* Track access pattern for debugging/monitoring */
-			track_folio_access(folio, pgdat, "inactive_list_scan");
+			track_folio_access(folio, pgdat, "INACTIVE_LIST");
 		}
 	}
 
