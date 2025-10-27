@@ -226,17 +226,18 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
  * 
  * Returns: 1 if page was previously accessed, 0 if first access
  * 
- * This function uses folio_test_clear_referenced() to atomically
- * check and clear the referenced flag, tracking page access patterns
- * without affecting core functionality.
+ * This function uses folio_test_referenced() to check the referenced flag
+ * WITHOUT clearing it, allowing multiple checks across different lists.
+ * The bit should be cleared separately using folio_clear_referenced() 
+ * at the end of the scan cycle.
  */
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
     const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     
-    /* Check and clear the referenced flag atomically */
-    was_accessed = folio_test_clear_referenced(folio);
+    /* Check the referenced flag WITHOUT clearing it */
+    was_accessed = folio_test_referenced(folio);
     
     if (was_accessed) {
         printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
@@ -479,6 +480,9 @@ static void scan_promote_list(unsigned long nr_to_scan,
 		list_for_each_entry_safe(folio, next, &l_hold, lru) {
 			/* Track access pattern for debugging/monitoring */
 			track_folio_access(folio, pgdat, "PROMOTE_LIST");
+			
+			/* Clear the referenced bit after tracking for next scan cycle */
+			folio_clear_referenced(folio);
 		}
 	}
 
@@ -568,6 +572,9 @@ static void scan_active_list(unsigned long nr_to_scan,
 
 		/* ADDED: Track page access pattern during active list scanning */
 		track_folio_access(folio, pgdat, "ACTIVE_LIST");
+		
+		/* Clear the referenced bit after tracking for next scan cycle */
+		folio_clear_referenced(folio);
 
 		if (unlikely(!ktmm_folio_evictable(folio))) {
 			ktmm_folio_putback_lru(folio);
@@ -705,6 +712,9 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 		list_for_each_entry_safe(folio, next, &folio_list, lru) {
 			/* Track access pattern for debugging/monitoring */
 			track_folio_access(folio, pgdat, "INACTIVE_LIST");
+			
+			/* Clear the referenced bit after tracking for next scan cycle */
+			folio_clear_referenced(folio);
 		}
 	}
 
@@ -822,7 +832,7 @@ static void scan_node(pg_data_t *pgdat,
 		scanned = sc->nr_scanned;
 
 		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 1024;  //sudarshan changed this to 32 from 1024
+			unsigned long nr_to_scan = 256;  //sudarshan changed this to 256 for better page access detection
 
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 		}
@@ -856,7 +866,7 @@ static void tmemd_try_to_sleep(pg_data_t *pgdat, int nid)
 		return;
 	
 	prepare_to_wait(&tmemd_wait[nid], &wait, TASK_INTERRUPTIBLE);
-	remaining = schedule_timeout(HZ);
+	remaining = schedule_timeout(5 * HZ);  //sudarshan changed to 5 seconds for better page access detection
 
 	finish_wait(&tmemd_wait[nid], &wait);
 }
