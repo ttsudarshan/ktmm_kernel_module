@@ -822,7 +822,7 @@ static void scan_node(pg_data_t *pgdat,
 		scanned = sc->nr_scanned;
 
 		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 32;  //sudarshan changed this to 32 from 1024
+			unsigned long nr_to_scan = 1024;  //sudarshan changed this to 32 from 1024
 
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 		}
