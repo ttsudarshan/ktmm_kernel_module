@@ -40,7 +40,7 @@
 #include <linux/swap.h>
 #include <linux/vmstat.h>
 #include <linux/wait.h>
-
+#include <linux/jiffies.h>
 #include "ktmm_hook.h"
 #include "ktmm_vmscan.h"
 
@@ -235,11 +235,16 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
     int was_accessed;
     const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
     
-    /* JUST MONITOR - don't clear the flag */
+    /* Check and clear the referenced flag atomically */
     was_accessed = folio_test_clear_referenced(folio);
     
-    printk(KERN_INFO "Page access MONITOR at %s: was_accessed=%d (folio=%p, node=%s)\n", 
-             location, was_accessed, folio, node_type);
+    if (was_accessed) {
+        printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
+                 location, folio, node_type, jiffies);
+    } else {
+        printk(KERN_DEBUG "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
+                 location, folio, node_type, jiffies);
+    }
     
     return was_accessed;
 }
