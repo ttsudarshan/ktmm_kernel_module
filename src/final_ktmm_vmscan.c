@@ -41,7 +41,6 @@
 #include <linux/vmstat.h>
 #include <linux/wait.h>
 #include <linux/jiffies.h>
-#include <linux/ktime.h>
 #include "ktmm_hook.h"
 #include "ktmm_vmscan.h"
 
@@ -239,7 +238,6 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
     
     /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
-
     
     if (was_accessed) {
         /* Print the access information */
@@ -792,22 +790,9 @@ static void scan_node(pg_data_t *pgdat,
 	int nid = pgdat->node_id;
 	int memcg_count;
 
-//   ktime_t start_time, end_time; - Variables to store timestamps
-// s64 scan_duration_ns; - Variable to store the calculated duration in nanoseconds
-// const char *node_type - String to identify if it's DRAM or PMEM node for the output message
-
-  ktime_t start_time, end_time;              // ADDED THIS
-	s64 scan_duration_ns;                        //and added this
-  const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";  // ← ADDED THIS
-
-
-  /* Start timing - capture time before any scanning operations */
-	start_time = ktime_get();
-
 	memset(&sc->nr, 0, sizeof(sc->nr));
 	memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
 	sc->target_mem_cgroup = memcg;
-
 
 	//pr_info("scanning lists on node %d", nid);
 	memcg_count = 0;
@@ -842,18 +827,11 @@ static void scan_node(pg_data_t *pgdat,
 		scanned = sc->nr_scanned;
 
 		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 1024;  //sudarshan changed this to 256 for better page access detection
+			unsigned long nr_to_scan = 256;  //sudarshan changed this to 256 for better page access detection
 
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 		}
 	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
-  /* End timing - capture time after all scanning is complete */
-	end_time = ktime_get();
-	scan_duration_ns = ktime_to_ns(ktime_sub(end_time, start_time));
-
-	/* Print the timing result (this is OUTSIDE the timed section) */
-	printk(KERN_INFO "=== SCAN TIMING: Node %d (%s) completed scan in %lld nanoseconds (%lld microseconds) ===\n",
-	       nid, node_type, scan_duration_ns, scan_duration_ns / 1000);
 }
 
 
