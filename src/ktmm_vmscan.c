@@ -58,6 +58,9 @@ static struct task_struct *tmemd_list[MAX_NUMNODES];
 /* per node tmemd wait queues */
 wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 
+/* Global variable to accumulate printk overhead during scan */
+static s64 g_printk_overhead_ns = 0;
+
 
 /************** MISC HOOKED FUNCTION PROTOTYPES *****************************/
 static struct mem_cgroup *(*pt_mem_cgroup_iter)(struct mem_cgroup *root,
@@ -227,19 +230,21 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
  * 
  * Returns: 1 if page was previously accessed, 0 if first access
  * 
- * This function checks the referenced bit and if it's set (accessed),
- * it prints the access information and immediately clears the bit.
- * This way, if the same folio is checked again in the same scan cycle,
- * it won't show as accessed again (avoiding duplicate logging).
+ * This function measures the time taken by printk calls and accumulates
+ * it in a global variable so we can subtract it from total scan time.
  */
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
     const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
+    ktime_t printk_start, printk_end;
+    s64 printk_duration;
     
     /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
 
+    /* Measure time BEFORE printk */
+    printk_start = ktime_get();
     
     if (was_accessed) {
         /* Print the access information */
@@ -252,6 +257,13 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
         printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
                  location, folio, node_type, jiffies);
     }
+    
+    /* Measure time AFTER printk */
+    printk_end = ktime_get();
+    
+    /* Calculate and accumulate printk overhead */
+    printk_duration = ktime_to_ns(ktime_sub(printk_end, printk_start));
+    g_printk_overhead_ns += printk_duration;
     
     return was_accessed;
 }
@@ -798,7 +810,11 @@ static void scan_node(pg_data_t *pgdat,
 
   ktime_t start_time, end_time;              // ADDED THIS
 	s64 scan_duration_ns;                        //and added this
+	s64 pure_scan_time_ns;                       // Pure scan time without printk
   const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";  // ← ADDED THIS
+
+	/* Reset printk overhead counter before scan */
+	g_printk_overhead_ns = 0;
 
 
   /* Start timing - capture time before any scanning operations */
@@ -842,21 +858,28 @@ static void scan_node(pg_data_t *pgdat,
 		scanned = sc->nr_scanned;
 
 		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 1024;  //sudarshan changed this to 256 for better page access detection
+			unsigned long nr_to_scan = ULONG_MAX;  // Scan ALL pages
 
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 		}
 	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
-  
   /* End timing - capture time after all scanning is complete */
 	end_time = ktime_get();
-	
-	/* Calculate duration - this is also outside the timed section */
 	scan_duration_ns = ktime_to_ns(ktime_sub(end_time, start_time));
+	
+	/* Calculate pure scan time by subtracting measured printk overhead */
+	pure_scan_time_ns = scan_duration_ns - g_printk_overhead_ns;
 
-	/* Print the timing result (this is OUTSIDE the timed section) */
-	printk(KERN_INFO "=== SCAN TIMING: Node %d (%s) completed scan in %lld nanoseconds (%lld microseconds) ===\n",
-	       nid, node_type, scan_duration_ns, scan_duration_ns / 1000);
+	/* Print the timing results with breakdown */
+	printk(KERN_INFO "=== SCAN TIMING [OPTION B - Measured Printk]: Node %d (%s) ===\n", nid, node_type);
+	printk(KERN_INFO "  Total time (including printk): %lld ns (%lld us)\n",
+	       scan_duration_ns, scan_duration_ns / 1000);
+	printk(KERN_INFO "  Measured printk overhead: %lld ns (%lld us)\n",
+	       g_printk_overhead_ns, g_printk_overhead_ns / 1000);
+	printk(KERN_INFO "  Pure scan time (excluding printk): %lld ns (%lld us)\n",
+	       pure_scan_time_ns, pure_scan_time_ns / 1000);
+	printk(KERN_INFO "  Printk overhead percentage: %lld%%\n",
+	       scan_duration_ns > 0 ? (g_printk_overhead_ns * 100) / scan_duration_ns : 0);
 }
 
 
