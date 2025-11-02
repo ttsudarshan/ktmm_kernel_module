@@ -847,8 +847,11 @@ static void scan_node(pg_data_t *pgdat,
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 		}
 	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
+  
   /* End timing - capture time after all scanning is complete */
 	end_time = ktime_get();
+	
+	/* Calculate duration - this is also outside the timed section */
 	scan_duration_ns = ktime_to_ns(ktime_sub(end_time, start_time));
 
 	/* Print the timing result (this is OUTSIDE the timed section) */

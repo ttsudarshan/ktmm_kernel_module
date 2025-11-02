@@ -789,6 +789,12 @@ static void scan_node(pg_data_t *pgdat,
 	struct mem_cgroup *memcg;
 	int nid = pgdat->node_id;
 	int memcg_count;
+	ktime_t start_time, end_time;
+	s64 scan_duration_ns;
+	const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
+
+	/* Start timing - capture time before any scanning operations */
+	start_time = ktime_get();
 
 	memset(&sc->nr, 0, sizeof(sc->nr));
 	memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
@@ -827,11 +833,19 @@ static void scan_node(pg_data_t *pgdat,
 		scanned = sc->nr_scanned;
 
 		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = 256;  //sudarshan changed this to 256 for better page access detection
+			unsigned long nr_to_scan = ULONG_MAX;  //sudarshan changed this to 256 for better page access detection
 
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 		}
 	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
+
+	/* End timing - capture time after all scanning is complete */
+	end_time = ktime_get();
+	scan_duration_ns = ktime_to_ns(ktime_sub(end_time, start_time));
+
+	/* Print the timing result (this is OUTSIDE the timed section) */
+	printk(KERN_INFO "=== SCAN TIMING: Node %d (%s) completed scan in %lld nanoseconds (%lld microseconds) ===\n",
+	       nid, node_type, scan_duration_ns, scan_duration_ns / 1000);
 }
 
 
