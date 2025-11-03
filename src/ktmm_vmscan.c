@@ -568,6 +568,10 @@ static void scan_active_list(unsigned long nr_to_scan,
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
 
 	spin_unlock_irq(&lruvec->lru_lock);
+	
+	/* Debug: Report what was isolated */
+	printk(KERN_INFO "scan_active[node %d, LRU %d]: Isolated %lu pages, scanned %lu\n",
+	       nid, lru, nr_taken, nr_scanned);
 
 	while (!list_empty(&l_hold)) {
 		struct folio *folio;
@@ -705,6 +709,10 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
 
 	spin_unlock_irq(&lruvec->lru_lock);
+	
+	/* Debug: Report what was isolated */
+	printk(KERN_INFO "scan_inactive[node %d, LRU %d]: Isolated %lu pages, scanned %lu\n",
+	       nid, lru, nr_taken, nr_scanned);
 
 	if (nr_taken == 0) return 0;
 
@@ -808,6 +816,20 @@ static void scan_node(pg_data_t *pgdat,
 
 	/* Reset printk overhead counter before scan */
 	g_printk_overhead_ns = 0;
+	
+	/* Debug: Check if node has any pages before scanning */
+	{
+		unsigned long total_lru_pages = 0;
+		int check_lru;
+		for_each_lru(check_lru) {
+			total_lru_pages += node_page_state(pgdat, NR_LRU_BASE + check_lru);
+		}
+		printk(KERN_INFO "Node %d (%s) has %lu total LRU pages before scan\n",
+		       nid, node_type, total_lru_pages);
+		if (total_lru_pages == 0) {
+			printk(KERN_WARNING "Node %d has NO pages in LRU lists!\n", nid);
+		}
+	}
 
 
   /* Start timing - capture time before any scanning operations */
