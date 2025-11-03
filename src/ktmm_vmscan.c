@@ -794,6 +794,8 @@ static void scan_node(pg_data_t *pgdat,
 	struct mem_cgroup *memcg;
 	int nid = pgdat->node_id;
 	int memcg_count;
+	unsigned long total_pages_scanned = 0;  // Track total pages scanned
+	unsigned long initial_nr_scanned;       // Store initial value
 
 //   ktime_t start_time, end_time; - Variables to store timestamps
 // s64 scan_duration_ns; - Variable to store the calculated duration in nanoseconds
@@ -814,6 +816,9 @@ static void scan_node(pg_data_t *pgdat,
 	memset(&sc->nr, 0, sizeof(sc->nr));
 	memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
 	sc->target_mem_cgroup = memcg;
+	
+	/* Store initial scanned count to calculate delta later */
+	initial_nr_scanned = sc->nr_scanned;
 
 
 	//pr_info("scanning lists on node %d", nid);
@@ -854,6 +859,10 @@ static void scan_node(pg_data_t *pgdat,
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 		}
 	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
+	
+	/* Calculate total pages scanned during this scan_node call */
+	total_pages_scanned = sc->nr_scanned - initial_nr_scanned;
+	
   /* End timing - capture time after all scanning is complete */
 	end_time = ktime_get();
 	scan_duration_ns = ktime_to_ns(ktime_sub(end_time, start_time));
@@ -862,8 +871,8 @@ static void scan_node(pg_data_t *pgdat,
 	pure_scan_time_ns = scan_duration_ns - g_printk_overhead_ns;
 
 	/* Print clean output */
-	printk(KERN_INFO "Scan time: Node %d (%s) = %lld microseconds (printk overhead: %lld us)\n",
-	       nid, node_type, pure_scan_time_ns / 1000, g_printk_overhead_ns / 1000);
+	printk(KERN_INFO "Scan time: Node %d (%s) = %lld microseconds, %lu pages scanned (printk overhead: %lld us)\n",
+	       nid, node_type, pure_scan_time_ns / 1000, total_pages_scanned, g_printk_overhead_ns / 1000);
 }
 
 
