@@ -871,15 +871,15 @@ static void scan_node(pg_data_t *pgdat,
 	pure_scan_time_ns = scan_duration_ns - g_printk_overhead_ns;
 
 	/* Print the timing results with breakdown */
-	printk(KERN_INFO "=== SCAN TIMING [OPTION B - Measured Printk]: Node %d (%s) ===\n", nid, node_type);
-	printk(KERN_INFO "  Total time (including printk): %lld ns (%lld us)\n",
-	       scan_duration_ns, scan_duration_ns / 1000);
-	printk(KERN_INFO "  Measured printk overhead: %lld ns (%lld us)\n",
-	       g_printk_overhead_ns, g_printk_overhead_ns / 1000);
+	// printk(KERN_INFO "=== SCAN TIMING [OPTION B - Measured Printk]: Node %d (%s) ===\n", nid, node_type);
+	// printk(KERN_INFO "  Total time (including printk): %lld ns (%lld us)\n",
+	//        scan_duration_ns, scan_duration_ns / 1000);
+	// printk(KERN_INFO "  Measured printk overhead: %lld ns (%lld us)\n",
+	//        g_printk_overhead_ns, g_printk_overhead_ns / 1000);
 	printk(KERN_INFO "  Pure scan time (excluding printk): %lld ns (%lld us)\n",
 	       pure_scan_time_ns, pure_scan_time_ns / 1000);
-	printk(KERN_INFO "  Printk overhead percentage: %lld%%\n",
-	       scan_duration_ns > 0 ? (g_printk_overhead_ns * 100) / scan_duration_ns : 0);
+	// printk(KERN_INFO "  Printk overhead percentage: %lld%%\n",
+	//        scan_duration_ns > 0 ? (g_printk_overhead_ns * 100) / scan_duration_ns : 0);
 }
 
 
