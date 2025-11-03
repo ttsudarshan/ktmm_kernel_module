@@ -58,20 +58,8 @@ static struct task_struct *tmemd_list[MAX_NUMNODES];
 /* per node tmemd wait queues */
 wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 
-/* Buffer for storing page access info - NO printk during scan */
-#define MAX_TRACK_ENTRIES 20000
-
-struct page_access_entry {
-	struct folio *folio;
-	const char *location;
-	unsigned long jiffies_val;
-	int was_accessed;
-	int is_dram;
-};
-
-static struct page_access_entry *access_buffer = NULL;
-static unsigned long access_buffer_count = 0;
-static int buffer_allocated = 0;
+/* Global variable to accumulate printk overhead during scan */
+static s64 g_printk_overhead_ns = 0;
 
 
 /************** MISC HOOKED FUNCTION PROTOTYPES *****************************/
@@ -236,29 +224,47 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 /**
  * track_folio_access - track if folio was previously accessed
  * 
- * Stores info in buffer for later printing - NO printk during scan!
+ * @folio: folio to check
+ * @pgdat: node data to determine node type
+ * @location: descriptive string for logging context
+ * 
+ * Returns: 1 if page was previously accessed, 0 if first access
+ * 
+ * This function measures the time taken by printk calls and accumulates
+ * it in a global variable so we can subtract it from total scan time.
  */
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
+    const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
+    ktime_t printk_start, printk_end;
+    s64 printk_duration;
     
     /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
 
-    /* Store in buffer - FAST (just memory write, NO printk!) */
-    if (access_buffer && access_buffer_count < MAX_TRACK_ENTRIES) {
-        access_buffer[access_buffer_count].folio = folio;
-        access_buffer[access_buffer_count].location = location;
-        access_buffer[access_buffer_count].jiffies_val = jiffies;
-        access_buffer[access_buffer_count].was_accessed = was_accessed;
-        access_buffer[access_buffer_count].is_dram = (pgdat->pm_node == 0);
-        access_buffer_count++;
-    }
+    /* Measure time BEFORE printk */
+    printk_start = ktime_get();
     
-    /* Clear the bit if accessed */
     if (was_accessed) {
+        /* Print the access information */
+        printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
+                 location, folio, node_type, jiffies);
+        
+        /* Immediately clear the bit after printing so we don't print it again in the same scan */
         folio_clear_referenced(folio);
-    }
+    } 
+    // else {
+    //     printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
+    //              location, folio, node_type, jiffies);
+    // }
+    
+    /* Measure time AFTER printk */
+    printk_end = ktime_get();
+    
+    /* Calculate and accumulate printk overhead */
+    printk_duration = ktime_to_ns(ktime_sub(printk_end, printk_start));
+    g_printk_overhead_ns += printk_duration;
     
     return was_accessed;
 }
@@ -798,17 +804,21 @@ static void scan_node(pg_data_t *pgdat,
 	struct mem_cgroup *memcg;
 	int nid = pgdat->node_id;
 	int memcg_count;
-	unsigned long i;  // For buffer iteration
 
-  ktime_t start_time, end_time;
-	s64 scan_duration_ns;
-  const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
+//   ktime_t start_time, end_time; - Variables to store timestamps
+// s64 scan_duration_ns; - Variable to store the calculated duration in nanoseconds
+// const char *node_type - String to identify if it's DRAM or PMEM node for the output message
 
-	/* Reset buffer */
-	access_buffer_count = 0;
+  ktime_t start_time, end_time;              // ADDED THIS
+	s64 scan_duration_ns;                        //and added this
+	s64 pure_scan_time_ns;                       // Pure scan time without printk
+  const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";  // ← ADDED THIS
+
+	/* Reset printk overhead counter before scan */
+	g_printk_overhead_ns = 0;
 
 
-  /* Start timing - NO PRINTK AFTER THIS POINT */
+  /* Start timing - capture time before any scanning operations */
 	start_time = ktime_get();
 
 	memset(&sc->nr, 0, sizeof(sc->nr));
@@ -854,31 +864,23 @@ static void scan_node(pg_data_t *pgdat,
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 		}
 	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
-  /* End timing - BEFORE ANY PRINTK (100% accurate!) */
+  /* End timing - capture time after all scanning is complete */
 	end_time = ktime_get();
 	scan_duration_ns = ktime_to_ns(ktime_sub(end_time, start_time));
+	
+	/* Calculate pure scan time by subtracting measured printk overhead */
+	pure_scan_time_ns = scan_duration_ns - g_printk_overhead_ns;
 
-	/* NOW print - simple output */
-	printk(KERN_INFO "Scan time: Node %d (%s) = %lld microseconds (%lu pages)\n",
-	       nid, node_type, scan_duration_ns / 1000, access_buffer_count);
-	
-	/* Print buffered debug info */
-	for (i = 0; i < access_buffer_count; i++) {
-		const char *node_str = access_buffer[i].is_dram ? "DRAM" : "PMEM";
-		if (access_buffer[i].was_accessed) {
-			printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n",
-			       access_buffer[i].location, access_buffer[i].folio, 
-			       node_str, access_buffer[i].jiffies_val);
-		} else {
-			printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n",
-			       access_buffer[i].location, access_buffer[i].folio,
-			       node_str, access_buffer[i].jiffies_val);
-		}
-	}
-	
-	if (access_buffer_count >= MAX_TRACK_ENTRIES) {
-		printk(KERN_WARNING "Buffer full! Increase MAX_TRACK_ENTRIES.\n");
-	}
+	/* Print the timing results with breakdown */
+	printk(KERN_INFO "=== SCAN TIMING: Node %d (%s) ===\n", nid, node_type);
+	// printk(KERN_INFO "  Total time (including printk): %lld ns (%lld us)\n",
+	//        scan_duration_ns, scan_duration_ns / 1000);g
+	// printk(KERN_INFO "  Measured printk overhead: %lld ns (%lld us)\n",
+	//        g_printk_overhead_ns, g_printk_overhead_ns / 1000);
+	printk(KERN_INFO "  Pure scan time (excluding printk): %lld ns (%lld us)\n",
+	       pure_scan_time_ns, pure_scan_time_ns / 1000);
+	// printk(KERN_INFO "  Printk overhead percentage: %lld%%\n",
+	//        scan_duration_ns > 0 ? (g_printk_overhead_ns * 100) / scan_duration_ns : 0);
 }
 
 
@@ -1026,17 +1028,6 @@ int tmemd_start_available(void)
 
 	set_ktmm_scan();
 
-	/* Allocate buffer for page access tracking */
-	if (!buffer_allocated) {
-		access_buffer = kmalloc(MAX_TRACK_ENTRIES * sizeof(struct page_access_entry), GFP_KERNEL);
-		if (!access_buffer) {
-			pr_err("Failed to allocate access tracking buffer\n");
-			return -ENOMEM;
-		}
-		buffer_allocated = 1;
-		pr_info("Allocated buffer: %d entries\n", MAX_TRACK_ENTRIES);
-	}
-
 	/* initialize wait queues for sleeping */
 	for (i = 0; i < MAX_NUMNODES; i++)
 		init_waitqueue_head(&tmemd_wait[i]);
@@ -1075,11 +1066,4 @@ void tmemd_stop_all(void)
 	}
 
 	uninstall_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
-	
-	/* Free buffer */
-	if (buffer_allocated && access_buffer) {
-		kfree(access_buffer);
-		access_buffer = NULL;
-		buffer_allocated = 0;
-	}
 }
