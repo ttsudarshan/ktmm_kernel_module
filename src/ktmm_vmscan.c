@@ -692,8 +692,6 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	unsigned long nr_scanned;
 	unsigned long nr_taken = 0;
 	unsigned long nr_migrated = 0;
-	unsigned long nr_reclaimed = 0;
-	(void)nr_reclaimed; /* Suppress unused variable warning - may be used in future */
 	bool file = is_file_lru(lru);
 	int nid = pgdat->node_id;
 	//pr_info("scanning inactive list");
@@ -734,7 +732,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	// 				0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
 	// 	nr_migrated = (ret >= 0 ? nr_taken - ret : 0);
 	// 	pr_debug("pgdat %d migrated %lu folios from inactive list", nid, nr_migrated);
-	// 	__mod_node_page_state(pgdat, NR_DEMOTED, nr_reclaimed);
+	// 	__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
 	// }
 //dummy code
   if (pgdat->pm_node == 0 && pmem_node_id != -1) {
