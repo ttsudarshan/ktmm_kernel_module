@@ -108,6 +108,9 @@ static int (*pt_folio_referenced)(struct folio *folio, int is_locked,
 				struct mem_cgroup *memcg, unsigned long *vm_flags);
 
 
+static unsigned long (*pt_node_page_state)(struct pglist_data *pgdat, enum node_stat_item item);
+
+
 /* __alloc_pages (page_alloc.c) */
 /* probably needs removed */
 static struct page *(*pt_alloc_pages)(gfp_t gfp_mask, unsigned int order, int preferred_nid,
@@ -215,6 +218,14 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
   //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
 
 	return pt_folio_referenced(folio, is_locked, memcg, vm_flags);
+}
+
+
+static unsigned long ktmm_node_page_state(struct pglist_data *pgdat, enum node_stat_item item)
+{
+  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
+
+	return pt_node_page_state(pgdat, item);
 }
 
 /*****************************************************************************
@@ -821,7 +832,7 @@ static void scan_node(pg_data_t *pgdat,
 		unsigned long total_lru_pages = 0;
 		int check_lru;
 		for_each_lru(check_lru) {
-			total_lru_pages += node_page_state(pgdat, NR_LRU_BASE + check_lru);
+			total_lru_pages += ktmm_node_page_state(pgdat, NR_LRU_BASE + check_lru);
 		}
 		printk(KERN_INFO "Node %d (%s) has %lu total LRU pages before scan\n",
 		       nid, node_type, total_lru_pages);
@@ -1019,6 +1030,7 @@ static struct ktmm_hook vmscan_hooks[] = {
 	HOOK("move_folios_to_lru", ktmm_move_folios_to_lru, &pt_move_folios_to_lru),
 	HOOK("folio_putback_lru", ktmm_folio_putback_lru, &pt_folio_putback_lru),
 	HOOK("folio_referenced", ktmm_folio_referenced, &pt_folio_referenced),
+	HOOK("node_page_state", ktmm_node_page_state, &pt_node_page_state),
 	HOOK("__alloc_pages", ktmm_alloc_pages, &pt_alloc_pages),
 };
 
