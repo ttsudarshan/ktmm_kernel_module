@@ -693,6 +693,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	unsigned long nr_taken = 0;
 	unsigned long nr_migrated = 0;
 	unsigned long nr_reclaimed = 0;
+	(void)nr_reclaimed; /* Suppress unused variable warning - may be used in future */
 	bool file = is_file_lru(lru);
 	int nid = pgdat->node_id;
 	//pr_info("scanning inactive list");
