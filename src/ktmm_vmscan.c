@@ -108,9 +108,6 @@ static int (*pt_folio_referenced)(struct folio *folio, int is_locked,
 				struct mem_cgroup *memcg, unsigned long *vm_flags);
 
 
-static unsigned long (*pt_node_page_state)(struct pglist_data *pgdat, enum node_stat_item item);
-
-
 /* __alloc_pages (page_alloc.c) */
 /* probably needs removed */
 static struct page *(*pt_alloc_pages)(gfp_t gfp_mask, unsigned int order, int preferred_nid,
@@ -220,119 +217,6 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
 	return pt_folio_referenced(folio, is_locked, memcg, vm_flags);
 }
 
-
-static unsigned long ktmm_node_page_state(struct pglist_data *pgdat, enum node_stat_item item)
-{
-  //printk(KERN_INFO "sudarshan: entered %s\n", __func__);
-
-	return pt_node_page_state(pgdat, item);
-}
-
-/**
- * populate_lru_for_testing - allocate test pages and add them to LRU lists
- * 
- * @pgdat:	node data struct
- * @nr_pages:	number of pages to allocate per LRU list
- * 
- * This function allocates test pages and adds them to the LRU lists so that
- * scanning can actually find pages to scan. Without this, LRU lists may be
- * empty and scanning will report 0 pages.
- */
-static int populate_lru_for_testing(struct pglist_data *pgdat, int nr_pages)
-{
-	int i, lru;
-	struct page *page;
-	struct lruvec *lruvec;
-	int total_allocated = 0;
-	
-	printk(KERN_INFO "Populating LRU lists with test pages for node %d\n", pgdat->node_id);
-	
-	lruvec = &pgdat->__lruvec;
-	
-	/* Allocate pages for each evictable LRU list */
-	for_each_evictable_lru(lru) {
-		int allocated = 0;
-		
-		for (i = 0; i < nr_pages; i++) {
-			/* Allocate a page */
-			page = alloc_page(GFP_KERNEL);
-			if (!page) {
-				printk(KERN_WARNING "Failed to allocate test page %d for LRU %d\n", i, lru);
-				break;
-			}
-			
-			/* Initialize page flags */
-			get_page(page);  // Increment refcount
-			SetPageLRU(page);
-			
-			/* Set appropriate flags based on LRU type */
-			if (lru == LRU_ACTIVE_ANON || lru == LRU_ACTIVE_FILE) {
-				SetPageActive(page);
-			} else {
-				ClearPageActive(page);
-			}
-			
-			if (lru == LRU_ACTIVE_ANON || lru == LRU_INACTIVE_ANON) {
-				SetPageSwapBacked(page);
-			} else {
-				ClearPageSwapBacked(page);
-			}
-			
-			/* Add to LRU list */
-			spin_lock_irq(&lruvec->lru_lock);
-			list_add_tail(&page->lru, &lruvec->lists[lru]);
-			__mod_node_page_state(pgdat, NR_LRU_BASE + lru, 1);
-			spin_unlock_irq(&lruvec->lru_lock);
-			
-			allocated++;
-		}
-		
-		printk(KERN_INFO "  Allocated %d pages for LRU %d\n", allocated, lru);
-		total_allocated += allocated;
-	}
-	
-	printk(KERN_INFO "Total test pages allocated: %d\n", total_allocated);
-	return total_allocated;
-}
-
-/**
- * free_test_pages_from_lru - free all test pages from LRU lists
- * 
- * @pgdat:	node data struct
- * 
- * This function frees all test pages that were added to the LRU lists
- * during testing to prevent memory leaks.
- */
-static void free_test_pages_from_lru(struct pglist_data *pgdat)
-{
-	struct lruvec *lruvec;
-	struct page *page, *next;
-	int lru;
-	int freed = 0;
-	
-	printk(KERN_INFO "Freeing test pages from node %d\n", pgdat->node_id);
-	
-	lruvec = &pgdat->__lruvec;
-	
-	spin_lock_irq(&lruvec->lru_lock);
-	
-	/* Free pages from all LRU lists */
-	for_each_lru(lru) {
-		list_for_each_entry_safe(page, next, &lruvec->lists[lru], lru) {
-			list_del(&page->lru);
-			ClearPageLRU(page);
-			__mod_node_page_state(pgdat, NR_LRU_BASE + lru, -1);
-			freed++;
-			put_page(page);
-			__free_page(page);
-		}
-	}
-	
-	spin_unlock_irq(&lruvec->lru_lock);
-	
-	printk(KERN_INFO "Freed %d test pages\n", freed);
-}
-
 /*****************************************************************************
  * Page Access Tracking Helper Functions
  *****************************************************************************/
@@ -342,28 +226,6 @@ static void free_test_pages_from_lru(struct pglist_data *pgdat)
  * 
  * Hybrid approach: Print only ACCESSED pages, measure printk overhead
  */
-/* Phase 1: Clear all reference bits BEFORE scanning */
-static void clear_all_reference_bits(struct pglist_data *pgdat)
-{
-    struct page *page;
-    struct folio *folio;
-    unsigned long pfn;
-    
-    for (pfn = pgdat->node_start_pfn; 
-         pfn < pgdat->node_start_pfn + pgdat->node_spanned_pages; 
-         pfn++) {
-        if (!pfn_valid(pfn)) continue;
-        
-        page = pfn_to_page(pfn);
-        folio = page_folio(page);
-        
-        if (folio_test_lru(folio)) {
-            folio_clear_referenced(folio);
-        }
-    }
-}
-
-/* Phase 2: Scan and track (without clearing!) */
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
@@ -371,25 +233,32 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
     ktime_t printk_start, printk_end;
     s64 printk_duration;
     
-    /* Check the referenced flag WITHOUT clearing it */
+    /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
 
+    /* Only print if accessed - much less output! */
     if (was_accessed) {
+        /* Measure time BEFORE printk */
         printk_start = ktime_get();
         
         printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
                  location, folio, node_type, jiffies);
         
+        /* Measure time AFTER printk */
         printk_end = ktime_get();
+        
+        /* Accumulate printk overhead */
         printk_duration = ktime_to_ns(ktime_sub(printk_end, printk_start));
         g_printk_overhead_ns += printk_duration;
         
-        /* DON'T clear here - we're just measuring! */
-        /* folio_clear_referenced(folio); */  // REMOVE THIS LINE
+        /* Clear the bit */
+        folio_clear_referenced(folio);
     }
+    // No printk for "not accessed" - keeps log clean!
     
     return was_accessed;
 }
+
 /*****************************************************************************
  * ALLOC & SWAP
  *****************************************************************************/
@@ -819,6 +688,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	unsigned long nr_scanned;
 	unsigned long nr_taken = 0;
 	unsigned long nr_migrated = 0;
+	unsigned long nr_reclaimed = 0;
 	bool file = is_file_lru(lru);
 	int nid = pgdat->node_id;
 	//pr_info("scanning inactive list");
@@ -855,7 +725,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	// 				0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG, &succeeded);
 	// 	nr_migrated = (ret >= 0 ? nr_taken - ret : 0);
 	// 	pr_debug("pgdat %d migrated %lu folios from inactive list", nid, nr_migrated);
-	// 	__mod_node_page_state(pgdat, NR_DEMOTED, nr_migrated);
+	// 	__mod_node_page_state(pgdat, NR_DEMOTED, nr_reclaimed);
 	// }
 //dummy code
   if (pgdat->pm_node == 0 && pmem_node_id != -1) {
@@ -904,164 +774,6 @@ static unsigned long scan_list(enum lru_list lru,
 	return scan_inactive_list(nr_to_scan, lruvec, sc, lru, pgdat);
 }
 
-/**
- * scan_all_dram_pages_comprehensive - Scan EVERY page in DRAM
- * 
- * @pgdat: node data struct
- * @sc: scan control
- *
- * This scans ALL pages including:
- * - LRU pages (active/inactive, anon/file)
- * - Unevictable pages 
- * - Mlocked pages
- * - Kernel pages
- * - Page cache pages
- * - Anonymous pages
- */
-static unsigned long scan_all_dram_pages_comprehensive(struct pglist_data *pgdat, struct scan_control *sc)
-{
-    struct zone *zone;
-    unsigned long total_scanned = 0;
-    unsigned long total_accessed = 0;
-    int nid = pgdat->node_id;
-    
-    printk(KERN_INFO "=== SCANNING 100%% OF DRAM PAGES ON NODE %d ===\n", nid);
-    
-    // Scan all zones in this node
-    for (zone = pgdat->node_zones; zone; zone = ktmm_next_zone(zone)) {
-        unsigned long zone_scanned = 0;
-        unsigned long zone_accessed = 0;
-        unsigned long pfn;
-        
-        if (!populated_zone(zone))
-            continue;
-            
-        printk(KERN_INFO "Scanning zone %s: %lu free of %lu managed pages (range: %lu-%lu)\n", 
-               zone->name, zone->free_area[0].nr_free, zone->managed_pages,
-               zone->zone_start_pfn, zone->zone_start_pfn + zone->spanned_pages);
-        
-        // Method: Scan via pageblock iteration (most comprehensive)
-        for (pfn = zone->zone_start_pfn; pfn < zone->zone_start_pfn + zone->spanned_pages; pfn++) {
-            struct page *page;
-            struct folio *folio;
-            
-            // Skip if not valid pfn
-            if (!pfn_valid(pfn))
-                continue;
-                
-            page = pfn_to_page(pfn);
-            
-            // Skip if page is not in this zone
-            if (page_zone(page) != zone)
-                continue;
-                
-            folio = page_folio(page);
-            
-            // Track this page's access
-            if (track_folio_access(folio, pgdat, "DRAM_COMPREHENSIVE")) {
-                zone_accessed++;
-            }
-            
-            zone_scanned++;
-            total_scanned++;
-            
-            // // Print progress every 10000 pages
-            // if (total_scanned % 10000 == 0) {
-            //     printk(KERN_INFO "Progress: scanned %lu total pages, %lu accessed\n", 
-            //            total_scanned, total_accessed);
-            // }
-            
-            // Avoid soft lockup - reschedule every 1000 pages
-            if (total_scanned % 1000 == 0) {
-                cond_resched();
-            }
-        }
-        
-        total_accessed += zone_accessed;
-        
-        printk(KERN_INFO "Zone %s: scanned %lu pages, %lu accessed pages\n",
-               zone->name, zone_scanned, zone_accessed);
-    }
-    
-    printk(KERN_INFO "=== NODE %d COMPLETE: scanned %lu TOTAL pages, %lu ACCESSED pages ===\n",
-           nid, total_scanned, total_accessed);
-    
-    return total_scanned;
-}
-
-/**
- * force_scan_all_memory - Force scanning of ALL memory regions
- * 
- * @pgdat: node data struct
- */
-static void force_scan_all_memory(struct pglist_data *pgdat)
-{
-    struct zone *zone;
-    int nid = pgdat->node_id;
-    
-    printk(KERN_INFO "=== PREPARING TO SCAN 100%% OF DRAM ON NODE %d ===\n", nid);
-    
-    // Print memory statistics
-    for (zone = pgdat->node_zones; zone; zone = ktmm_next_zone(zone)) {
-        if (!populated_zone(zone))
-            continue;
-            
-        printk(KERN_INFO "Zone %s: start_pfn=%lu, spanned=%lu, present=%lu, managed=%lu\n",
-               zone->name, zone->zone_start_pfn, zone->spanned_pages,
-               zone->present_pages, zone->managed_pages);
-    }
-    
-    // Force all types of pages to be accessible
-    ktmm_lru_add_drain();
-    
-    printk(KERN_INFO "Ready to scan ALL DRAM pages on node %d\n", nid);
-}
-
-/**
- * scan_node_comprehensive - Scan 100% of DRAM pages
- * 
- * @pgdat: node data struct
- * @sc: scan control
- * @reclaim: memory reclaim cookie
- */
-static void scan_node_comprehensive(pg_data_t *pgdat, 
-                                   struct scan_control *sc,
-                                   struct mem_cgroup_reclaim_cookie *reclaim)
-{
-    int nid = pgdat->node_id;
-    ktime_t start_time, end_time;
-    s64 scan_duration_ns;
-    const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
-    
-    /* Only scan DRAM nodes comprehensively */
-    if (pgdat->pm_node != 0) {
-        printk(KERN_INFO "Skipping comprehensive scan on PMEM node %d\n", nid);
-        return;
-    }
-    
-    /* Reset printk overhead counter */
-    g_printk_overhead_ns = 0;
-    
-    /* Prepare for scanning */
-    force_scan_all_memory(pgdat);
-    
-    /* Start timing */
-    start_time = ktime_get();
-    
-    /* Perform 100% comprehensive scan of ALL DRAM pages */
-    unsigned long total_pages_scanned = scan_all_dram_pages_comprehensive(pgdat, sc);
-    
-    /* End timing */
-    end_time = ktime_get();
-    scan_duration_ns = ktime_to_ns(ktime_sub(end_time, start_time));
-    
-    /* Calculate pure scan time (excluding printk overhead) */
-    s64 pure_scan_time_ns = scan_duration_ns - g_printk_overhead_ns;
-    
-    /* Print final results */
-    printk(KERN_INFO "=== NODE %d (%s): SCANNED 100%% OF DRAM - %lu PAGES IN %lld MICROSECONDS ===\n",
-           nid, node_type, total_pages_scanned, pure_scan_time_ns / 1000);
-}
 
 /**
  * scan_node - scan a node's LRU lists
@@ -1083,6 +795,10 @@ static void scan_node(pg_data_t *pgdat,
 	int nid = pgdat->node_id;
 	int memcg_count;
 
+//   ktime_t start_time, end_time; - Variables to store timestamps
+// s64 scan_duration_ns; - Variable to store the calculated duration in nanoseconds
+// const char *node_type - String to identify if it's DRAM or PMEM node for the output message
+
   ktime_t start_time, end_time;
 	s64 scan_duration_ns;
 	s64 pure_scan_time_ns;
@@ -1091,12 +807,14 @@ static void scan_node(pg_data_t *pgdat,
 	/* Reset printk overhead counter before scan */
 	g_printk_overhead_ns = 0;
 
+
   /* Start timing - capture time before any scanning operations */
 	start_time = ktime_get();
 
 	memset(&sc->nr, 0, sizeof(sc->nr));
 	memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
 	sc->target_mem_cgroup = memcg;
+
 
 	//pr_info("scanning lists on node %d", nid);
 	memcg_count = 0;
@@ -1136,7 +854,6 @@ static void scan_node(pg_data_t *pgdat,
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 		}
 	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
-	
   /* End timing - capture time after all scanning is complete */
 	end_time = ktime_get();
 	scan_duration_ns = ktime_to_ns(ktime_sub(end_time, start_time));
@@ -1240,14 +957,8 @@ static int tmemd(void *p)
 	 */
 	for ( ; ; )
 	{
-		// Scan 100% of DRAM pages (only for DRAM nodes)
-		if (pgdat->pm_node == 0) {
-			scan_node_comprehensive(pgdat, &sc, &reclaim);
-		} else {
-			// Use original scanner for PMEM
-			scan_node(pgdat, &sc, &reclaim);
-		}
-		
+		scan_node(pgdat, &sc, &reclaim);
+
 		if (kthread_should_stop()) break;
 
 		tmemd_try_to_sleep(pgdat, nid);
@@ -1278,7 +989,6 @@ static struct ktmm_hook vmscan_hooks[] = {
 	HOOK("move_folios_to_lru", ktmm_move_folios_to_lru, &pt_move_folios_to_lru),
 	HOOK("folio_putback_lru", ktmm_folio_putback_lru, &pt_folio_putback_lru),
 	HOOK("folio_referenced", ktmm_folio_referenced, &pt_folio_referenced),
-	HOOK("node_page_state", ktmm_node_page_state, &pt_node_page_state),
 	HOOK("__alloc_pages", ktmm_alloc_pages, &pt_alloc_pages),
 };
 
