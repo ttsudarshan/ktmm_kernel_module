@@ -709,16 +709,17 @@ static void scan_active_list(unsigned long nr_to_scan,
 		}
 
 		// node migration
-		if (pgdat->pm_node != 0) {
-			//pr_debug("active pm_node");
-			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
-				pr_debug("set promote");
-				//SetPagePromote(page); NEEDS TO BE MODULE TRACKED
-				folio_set_promote(folio);
-				list_add(&folio->lru, &l_promote);
-				continue;
-			}
-		}
+// node migration
+if (pgdat->pm_node != 0) {
+  if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
+      pr_debug("set promote");
+      folio_clear_active(folio);  // *** ADDed THIS LINE to fix scanning issue ***
+      folio_set_promote(folio);
+      list_add(&folio->lru, &l_promote);
+      continue;
+  }
+}
+
 
 		// might not need, we only care about promoting here in the
 		// module
