@@ -684,10 +684,6 @@ static void scan_active_list(unsigned long nr_to_scan,
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
 
 	spin_unlock_irq(&lruvec->lru_lock);
-	
-	/* Debug: Report what was isolated */
-	printk(KERN_INFO "scan_active[node %d, LRU %d]: Isolated %lu pages, scanned %lu\n",
-	       nid, lru, nr_taken, nr_scanned);
 
 	while (!list_empty(&l_hold)) {
 		struct folio *folio;
@@ -818,32 +814,12 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 	// We want to isolate the pages we are going to scan.
 	spin_lock_irq(&lruvec->lru_lock);
 
-	/* Debug: Check list before isolation */
-	{
-		struct list_head *lru_list = &lruvec->lists[lru];
-		unsigned long list_count = 0;
-		struct folio *temp_folio;
-		
-		if (!list_empty(lru_list)) {
-			list_for_each_entry(temp_folio, lru_list, lru) {
-				list_count++;
-				if (list_count > 100) break; // Just sample first 100
-			}
-		}
-		printk(KERN_INFO "  Before isolation: LRU %d has ~%lu pages in list, requesting %lu\n",
-		       lru, list_count, nr_to_scan);
-	}
-
 	nr_taken = ktmm_isolate_lru_folios(nr_to_scan, lruvec, &folio_list,
 				     &nr_scanned, sc, lru);
 
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
 
 	spin_unlock_irq(&lruvec->lru_lock);
-	
-	/* Debug: Report what was isolated */
-	printk(KERN_INFO "scan_inactive[node %d, LRU %d]: Isolated %lu pages, scanned %lu\n",
-	       nid, lru, nr_taken, nr_scanned);
 
 	if (nr_taken == 0) return 0;
 
@@ -947,49 +923,6 @@ static void scan_node(pg_data_t *pgdat,
 
 	/* Reset printk overhead counter before scan */
 	g_printk_overhead_ns = 0;
-	
-	/* Debug: Check if node has any pages before scanning */
-	{
-		unsigned long total_lru_pages = 0;
-		unsigned long direct_count = 0;
-		int check_lru;
-		struct lruvec *check_lruvec;
-		
-		/* Method 1: Use statistics */
-		for_each_lru(check_lru) {
-			unsigned long pages_in_list = ktmm_node_page_state(pgdat, NR_LRU_BASE + check_lru);
-			total_lru_pages += pages_in_list;
-			printk(KERN_INFO "  LRU %d has %lu pages (via stats)\n", check_lru, pages_in_list);
-		}
-		
-		/* Method 2: Direct count by iterating lists */
-		check_lruvec = &memcg->nodeinfo[nid]->lruvec;
-		for_each_lru(check_lru) {
-			struct list_head *lru_list = &check_lruvec->lists[check_lru];
-			struct folio *folio;
-			unsigned long count = 0;
-			
-			if (!list_empty(lru_list)) {
-				spin_lock_irq(&check_lruvec->lru_lock);
-				list_for_each_entry(folio, lru_list, lru) {
-					count++;
-					if (count > 10000) break; // Safety limit for counting
-				}
-				spin_unlock_irq(&check_lruvec->lru_lock);
-			}
-			direct_count += count;
-			printk(KERN_INFO "  LRU %d has %lu pages (via direct count)\n", check_lru, count);
-		}
-		
-		printk(KERN_INFO "=== STARTING SINGLE COMPREHENSIVE SCAN OF ALL DRAM ===\n");
-		printk(KERN_INFO "Node %d (%s) has %lu total LRU pages (stats) / %lu pages (direct)\n",
-		       nid, node_type, total_lru_pages, direct_count);
-		if (total_lru_pages == 0 && direct_count == 0) {
-			printk(KERN_WARNING "WARNING: Node %d has NO pages in LRU lists!\n", nid);
-			printk(KERN_WARNING "This is unusual - system may have just booted or memory is all free.\n");
-			printk(KERN_WARNING "Try running some applications to populate memory before scanning.\n");
-		}
-	}
 
 
   /* Start timing - capture time before any scanning operations */
@@ -1052,15 +985,9 @@ static void scan_node(pg_data_t *pgdat,
 	/* Calculate pure scan time (excluding printk overhead) */
 	pure_scan_time_ns = scan_duration_ns - g_printk_overhead_ns;
 
-	/* Print clean output - shows ALL DRAM pages scanned in single scan */
-	printk(KERN_INFO "=== SINGLE SCAN COMPLETE ===\n");
-	printk(KERN_INFO "Node %d (%s): Scanned %lu pages in %lld microseconds (printk overhead: %lld us)\n",
-	       nid, node_type, total_pages_scanned, pure_scan_time_ns / 1000, g_printk_overhead_ns / 1000);
-	if (pure_scan_time_ns > 0 && total_pages_scanned > 0) {
-		printk(KERN_INFO "Scan rate: %llu pages/second\n",
-		       (total_pages_scanned * 1000000000ULL) / pure_scan_time_ns);
-	}
-	printk(KERN_INFO "============================\n");
+	/* Print simple, clean output */
+	printk(KERN_INFO "Node %d (%s): Scanned %lu pages in %lld microseconds\n",
+	       nid, node_type, total_pages_scanned, pure_scan_time_ns / 1000);
 }
 
 
@@ -1248,3 +1175,4 @@ void tmemd_stop_all(void)
 
 	uninstall_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
 }
+//n
