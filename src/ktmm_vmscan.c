@@ -342,6 +342,28 @@ static void free_test_pages_from_lru(struct pglist_data *pgdat)
  * 
  * Hybrid approach: Print only ACCESSED pages, measure printk overhead
  */
+/* Phase 1: Clear all reference bits BEFORE scanning */
+static void clear_all_reference_bits(struct pglist_data *pgdat)
+{
+    struct page *page;
+    struct folio *folio;
+    unsigned long pfn;
+    
+    for (pfn = pgdat->node_start_pfn; 
+         pfn < pgdat->node_start_pfn + pgdat->node_spanned_pages; 
+         pfn++) {
+        if (!pfn_valid(pfn)) continue;
+        
+        page = pfn_to_page(pfn);
+        folio = page_folio(page);
+        
+        if (folio_test_lru(folio)) {
+            folio_clear_referenced(folio);
+        }
+    }
+}
+
+/* Phase 2: Scan and track (without clearing!) */
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
@@ -349,32 +371,25 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
     ktime_t printk_start, printk_end;
     s64 printk_duration;
     
-    /* Check the referenced flag */
+    /* Check the referenced flag WITHOUT clearing it */
     was_accessed = folio_test_referenced(folio);
 
-    /* Only print if accessed - much less output! */
     if (was_accessed) {
-        /* Measure time BEFORE printk */
         printk_start = ktime_get();
         
         printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
                  location, folio, node_type, jiffies);
         
-        /* Measure time AFTER printk */
         printk_end = ktime_get();
-        
-        /* Accumulate printk overhead */
         printk_duration = ktime_to_ns(ktime_sub(printk_end, printk_start));
         g_printk_overhead_ns += printk_duration;
         
-        /* Clear the bit */
-        folio_clear_referenced(folio);
+        /* DON'T clear here - we're just measuring! */
+        /* folio_clear_referenced(folio); */  // REMOVE THIS LINE
     }
-    // No printk for "not accessed" - keeps log clean!
     
     return was_accessed;
 }
-
 /*****************************************************************************
  * ALLOC & SWAP
  *****************************************************************************/
