@@ -246,10 +246,11 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
         
         /* Immediately clear the bit after printing so we don't print it again in the same scan */
         folio_clear_referenced(folio);
-    } else {
-        printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
-                 location, folio, node_type, jiffies);
-    }
+    } 
+    //else {
+    //     printk(KERN_INFO "Not accessed at %s: referenced_bit=0 (folio=%p, node=%s, jiffies=%lu)\n", 
+    //              location, folio, node_type, jiffies);
+    // }
     
     return was_accessed;
 }
