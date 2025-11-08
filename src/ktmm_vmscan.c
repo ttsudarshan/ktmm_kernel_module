@@ -950,11 +950,11 @@ static unsigned long scan_all_dram_pages_comprehensive(struct pglist_data *pgdat
             zone_scanned++;
             total_scanned++;
             
-            // Print progress every 10000 pages
-            if (total_scanned % 10000 == 0) {
-                printk(KERN_INFO "Progress: scanned %lu total pages, %lu accessed\n", 
-                       total_scanned, total_accessed);
-            }
+            // // Print progress every 10000 pages
+            // if (total_scanned % 10000 == 0) {
+            //     printk(KERN_INFO "Progress: scanned %lu total pages, %lu accessed\n", 
+            //            total_scanned, total_accessed);
+            // }
             
             // Avoid soft lockup - reschedule every 1000 pages
             if (total_scanned % 1000 == 0) {
