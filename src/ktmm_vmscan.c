@@ -726,7 +726,7 @@ static unsigned long scan_inactive_list(unsigned long nr_to_scan,
 //dummy code
   if (pgdat->pm_node == 0 && pmem_node_id != -1) {
     nr_migrated = 0;  // No migration actually happens
-    pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from inactive list", nid, nr_taken);
+    // pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from inactive list", nid, nr_taken);
   }
 
 	spin_lock_irq(&lruvec->lru_lock);
