@@ -458,7 +458,7 @@ static void scan_promote_list(unsigned long nr_to_scan,
 	struct list_head *src = &lruvec->lists[lru];
 
 	if (list_empty(src))
-		pr_debug("promote list empty");
+		// pr_debug("promote list empty");
 
 	//pr_debug("scanning promote list");
 
@@ -475,8 +475,8 @@ static void scan_promote_list(unsigned long nr_to_scan,
 
 	spin_unlock_irq(&lruvec->lru_lock);
 
-	pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
-	pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
+	// pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
+	// pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
 
 	/* ADDED: Track access patterns for each folio in promote list */
 	if (!list_empty(&l_hold)) {
@@ -502,7 +502,7 @@ static void scan_promote_list(unsigned long nr_to_scan,
   //dummy code
   if (nr_taken) {
     nr_migrated = 0;  // No migration actually happens
-    pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from promote list", nid, nr_taken);
+    // pr_debug("pgdat %d MIGRATION DISABLED - would have migrated %lu folios from promote list", nid, nr_taken);
   }
 
 	spin_lock_irq(&lruvec->lru_lock);
@@ -592,7 +592,7 @@ static void scan_active_list(unsigned long nr_to_scan,
 		if (pgdat->pm_node != 0) {
 			//pr_debug("active pm_node");
 			if (ktmm_folio_referenced(folio, 0, sc->target_mem_cgroup, &vm_flags)) {
-				pr_debug("set promote");
+				// pr_debug("set promote");
 				//SetPagePromote(page); NEEDS TO BE MODULE TRACKED
 				folio_set_promote(folio);
 				list_add(&folio->lru, &l_promote);
@@ -640,9 +640,9 @@ static void scan_active_list(unsigned long nr_to_scan,
 	nr_deactivate = ktmm_move_folios_to_lru(lruvec, &l_inactive);
 	nr_promote = ktmm_move_folios_to_lru(lruvec, &l_promote);
 
-	pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
-	pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
-	pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
+	// pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
+	// pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
+	// pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
 
 	// Keep all free folios in l_active list
 	list_splice(&l_inactive, &l_active);
