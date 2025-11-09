@@ -836,7 +836,7 @@ static void scan_node(pg_data_t *pgdat,
     unsigned long nr_taken_this_lru;
 
 		for_each_evictable_lru(lru) {
-			unsigned long nr_to_scan = ULONG_MAX;  //sudarshan changed this to 256 for better page access detection
+			unsigned long nr_to_scan = 200000;  //sudarshan changed this to 256 for better page access detection
 
       nr_taken_this_lru = scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 			
