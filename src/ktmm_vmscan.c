@@ -833,6 +833,7 @@ static void scan_node(pg_data_t *pgdat,
 
 		reclaimed = sc->nr_reclaimed;
 		scanned = sc->nr_scanned;
+    unsigned long nr_taken_this_lru;
 
 		for_each_evictable_lru(lru) {
 			unsigned long nr_to_scan = ULONG_MAX;  //sudarshan changed this to 256 for better page access detection
