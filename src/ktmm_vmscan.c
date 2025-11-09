@@ -790,6 +790,13 @@ static void scan_node(pg_data_t *pgdat,
 	struct mem_cgroup *memcg;
 	int nid = pgdat->node_id;
 	int memcg_count;
+	
+	/* Timing and page count tracking */
+	u64 scan_start_time, scan_end_time;
+	u64 total_scan_time_us;
+	unsigned long total_pages_scanned = 0;
+
+	scan_start_time = ktime_get_ns();
 
 	memset(&sc->nr, 0, sizeof(sc->nr));
 	memcg = ktmm_mem_cgroup_iter(NULL, NULL, reclaim);
@@ -831,8 +838,18 @@ static void scan_node(pg_data_t *pgdat,
 			unsigned long nr_to_scan = 256;  //sudarshan changed this to 256 for better page access detection
 
 			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
+			
+			/* Track total pages scanned across all LRU lists */
+			total_pages_scanned += nr_to_scan;
 		}
 	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
+	
+	/* Calculate and print scan statistics */
+	scan_end_time = ktime_get_ns();
+	total_scan_time_us = (scan_end_time - scan_start_time) / 1000;  /* Convert nanoseconds to microseconds */
+	
+	printk(KERN_INFO "*** SCAN_STATS (Node %d): Total Pages Scanned: %lu, Total Scan Time: %llu us ***\n", 
+	       nid, total_pages_scanned, total_scan_time_us);
 }
 
 
