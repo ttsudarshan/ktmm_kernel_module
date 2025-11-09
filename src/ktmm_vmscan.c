@@ -475,8 +475,8 @@ static void scan_promote_list(unsigned long nr_to_scan,
 
 	spin_unlock_irq(&lruvec->lru_lock);
 
-	// pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
-	// pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
+	pr_debug("pgdat %d scanned %lu on promote list", nid, nr_scanned);
+	pr_debug("pgdat %d taken %lu on promote list", nid, nr_taken);
 
 	/* ADDED: Track access patterns for each folio in promote list */
 	if (!list_empty(&l_hold)) {
@@ -640,9 +640,9 @@ static void scan_active_list(unsigned long nr_to_scan,
 	nr_deactivate = ktmm_move_folios_to_lru(lruvec, &l_inactive);
 	nr_promote = ktmm_move_folios_to_lru(lruvec, &l_promote);
 
-	// pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
-	// pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
-	// pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
+	pr_debug("pgdat %d folio activated: %d", nid, nr_activate);
+	pr_debug("pgdat %d folio deactivated: %d", nid, nr_deactivate);
+	pr_debug("pgdat %d folio promoted: %d", nid, nr_promote);
 
 	// Keep all free folios in l_active list
 	list_splice(&l_inactive, &l_active);
@@ -837,10 +837,10 @@ static void scan_node(pg_data_t *pgdat,
 		for_each_evictable_lru(lru) {
 			unsigned long nr_to_scan = 256;  //sudarshan changed this to 256 for better page access detection
 
-      nr_taken_this_lru = scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
+			scan_list(lru, nr_to_scan, lruvec, sc, pgdat);
 			
 			/* Track total pages scanned across all LRU lists */
-      total_pages_scanned += nr_taken_this_lru;
+			total_pages_scanned += nr_to_scan;
 		}
 	} while ((memcg = ktmm_mem_cgroup_iter(NULL, memcg, NULL)));
 	
