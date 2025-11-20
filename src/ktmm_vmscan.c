@@ -293,7 +293,7 @@ static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, co
         spin_unlock(&page_access_lock);
         
         /* Print the access information with both current and first access jiffies */
-        printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, current_jiffies=%lu, first_access_jiffies=%lu, access_age=%lu) ***\n", 
+        printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, current_jiffies=%lu, first_access_jiffies=%lu) ***\n",  //removed access_age
                  location, folio, node_type, current_jiffies, first_access_jiffies, 
                  (current_jiffies - first_access_jiffies));
         
