@@ -57,6 +57,18 @@ static struct task_struct *tmemd_list[MAX_NUMNODES];
 /* per node tmemd wait queues */
 wait_queue_head_t tmemd_wait[MAX_NUMNODES];
 
+/************** PAGE ACCESS TRACKING HASHTABLE ******************************/
+/* Hashtable to track first access time of pages */
+#define PAGE_ACCESS_HASH_BITS 16  /* 2^16 = 65536 buckets */
+static DEFINE_HASHTABLE(page_access_hash, PAGE_ACCESS_HASH_BITS);
+static DEFINE_SPINLOCK(page_access_lock);  /* Spinlock for hashtable access */
+
+/* Structure to store page access information in hashtable */
+struct page_access_entry {
+	struct hlist_node hash_node;    /* Hash list node */
+	unsigned long pfn;               /* Page frame number as key */
+	unsigned long first_access_jiffies;  /* Jiffies when first accessed */
+};
 
 /************** MISC HOOKED FUNCTION PROTOTYPES *****************************/
 static struct mem_cgroup *(*pt_mem_cgroup_iter)(struct mem_cgroup *root,
@@ -230,19 +242,60 @@ static int ktmm_folio_referenced(struct folio *folio, int is_locked,
  * it prints the access information and immediately clears the bit.
  * This way, if the same folio is checked again in the same scan cycle,
  * it won't show as accessed again (avoiding duplicate logging).
+ * 
+ * Now also tracks first access time using a hashtable to display both
+ * current jiffies and first access jiffies.
  */
 static int track_folio_access(struct folio *folio, struct pglist_data *pgdat, const char *location)
 {
     int was_accessed;
     const char *node_type = (pgdat->pm_node == 0) ? "DRAM" : "PMEM";
+    unsigned long pfn;
+    struct page_access_entry *entry;
+    unsigned long first_access_jiffies = 0;
+    unsigned long current_jiffies;
+    bool found = false;
     
     /* Check the referenced flag */
     was_accessed = folio_test_referenced(folio);
     
     if (was_accessed) {
-        /* Print the access information */
-        printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, jiffies=%lu) ***\n", 
-                 location, folio, node_type, jiffies);
+        current_jiffies = jiffies;
+        
+        /* Get the page frame number for the folio */
+        pfn = folio_pfn(folio);
+        
+        /* Lock the hashtable for thread-safe access */
+        spin_lock(&page_access_lock);
+        
+        /* Search for existing entry in the hashtable */
+        hash_for_each_possible(page_access_hash, entry, hash_node, pfn) {
+            if (entry->pfn == pfn) {
+                first_access_jiffies = entry->first_access_jiffies;
+                found = true;
+                break;
+            }
+        }
+        
+        /* If not found, add new entry with current jiffies as first access */
+        if (!found) {
+            entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
+            if (entry) {
+                entry->pfn = pfn;
+                entry->first_access_jiffies = current_jiffies;
+                hash_add(page_access_hash, &entry->hash_node, pfn);
+                first_access_jiffies = current_jiffies;
+            } else {
+                printk(KERN_WARNING "Failed to allocate memory for page access entry\n");
+            }
+        }
+        
+        spin_unlock(&page_access_lock);
+        
+        /* Print the access information with both current and first access jiffies */
+        printk(KERN_INFO "*** ACCESSED at %s: referenced_bit=1 (folio=%p, node=%s, current_jiffies=%lu, first_access_jiffies=%lu, access_age=%lu) ***\n", 
+                 location, folio, node_type, current_jiffies, first_access_jiffies, 
+                 (current_jiffies - first_access_jiffies));
         
         /* Immediately clear the bit after printing so we don't print it again in the same scan */
         folio_clear_referenced(folio);
@@ -996,6 +1049,10 @@ int tmemd_start_available(void)
 	int ret;
 
 	set_ktmm_scan();
+	
+	/* Initialize the page access tracking hashtable */
+	hash_init(page_access_hash);
+	printk(KERN_INFO "Page access tracking hashtable initialized\n");
 
 	/* initialize wait queues for sleeping */
 	for (i = 0; i < MAX_NUMNODES; i++)
@@ -1022,6 +1079,33 @@ int tmemd_start_available(void)
 
 
 /**
+ * page_access_hash_cleanup - cleanup the page access hashtable
+ * 
+ * This function frees all entries in the page access hashtable.
+ * Should be called when the module is unloaded.
+ */
+static void page_access_hash_cleanup(void)
+{
+	struct page_access_entry *entry;
+	struct hlist_node *tmp;
+	int bkt;
+	unsigned long entry_count = 0;
+	
+	spin_lock(&page_access_lock);
+	
+	/* Iterate through all buckets and free entries */
+	hash_for_each_safe(page_access_hash, bkt, tmp, entry, hash_node) {
+		hash_del(&entry->hash_node);
+		kfree(entry);
+		entry_count++;
+	}
+	
+	spin_unlock(&page_access_lock);
+	
+	printk(KERN_INFO "Page access hashtable cleaned up, freed %lu entries\n", entry_count);
+}
+
+/**
  * This stops all thread daemons for each node when exiting.
  * It uses the node ID to grab the daemon out of our local list.
  */
@@ -1035,4 +1119,7 @@ void tmemd_stop_all(void)
 	}
 
 	uninstall_hooks(vmscan_hooks, ARRAY_SIZE(vmscan_hooks));
+	
+	/* Clean up the page access tracking hashtable */
+	page_access_hash_cleanup();
 }
